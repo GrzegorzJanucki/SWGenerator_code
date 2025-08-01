@@ -6,17 +6,14 @@
 
 #include "ssd1306.h"
 #include "image.h"
-#include "acme_5_outlines_font.h"
-#include "bubblesstandard_font.h"
-#include "crackers_font.h"
-#include "BMSPA_font.h"
 #include "main.h"
+#include "ssd1306_setup.h"
 
 const uint8_t num_chars_per_disp[]={7,7,7,5};
-const uint8_t *fonts[4]= {acme_font, bubblesstandard_font, crackers_font, BMSPA_font};
+const uint8_t *fonts[4]= {};
 ssd1306_t disp;
 
-void initialization (void) {
+void setup(void) {
     i2c_init(I2C1_PORT, 400*1000);
     gpio_set_function(I2C1_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C1_SCL, GPIO_FUNC_I2C);
@@ -28,7 +25,7 @@ void initialization (void) {
 
 }
 
-void animation(void){
+void test(void){
     const char *words[]= {"SSD1306", "DISPLAY", "DRIVER"};
  
     char buf[8];

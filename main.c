@@ -3,17 +3,22 @@
 #include "pico/multicore.h"
 #include "hardware/i2c.h"
 #include "hardware/uart.h"
+#include <math.h>
+#include "pico/binary_info.h"
+#include "pico/util/queue.h"
+#include "pico/sem.h"
+#include <string.h>
+
+
+#include "quadrature_encoder.pio.h"
+#include "button.pio.h"
 #include "ssd1306.h"
-#include "ssd1306_init.h"
+#include "ssd1306_setup.h"
 #include "main.h"
+#include "BMSPA_font.h"
+#include "core1_entry.h"
+#include "at24c256.h"
 
-
-// I2C defines
-// This example will use I2C0 on GPIO8 (SDA) and GPIO9 (SCL) running at 400KHz.
-// Pins can be changed, see the GPIO function select table in the datasheet for information on GPIO assignments
-#define I2C0_PORT i2c0
-#define I2C0_SDA 0
-#define I2C0_SCL 1
 
 
 // UART defines
@@ -26,23 +31,19 @@
 #define UART_TX_PIN 4
 #define UART_RX_PIN 5
 
-
-void core1_entry() {
-
-}
-
 int main()
 { 
     stdio_init_all();
 
+    queue_init(&core0_to_core1_queue, sizeof(queue_entry_t), 10);
+    queue_init(&core1_to_core0_queue, sizeof(queue_entry_t), 10);
+
     // I2C Initialisation. Using it at 400Khz.
-    i2c_init(I2C0_PORT, 400*1000);
+    i2c_init(I2C0_PORT, 100*1000);
     gpio_set_function(I2C0_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C0_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C0_SDA);
     gpio_pull_up(I2C0_SCL);
-
-    // For more examples of I2C use see https://github.com/raspberrypi/pico-examples/tree/master/i2c
 
     // Set up our UART
     uart_init(UART_ID, BAUD_RATE);
@@ -56,11 +57,20 @@ int main()
     
     // Send out a string, with CR/LF conversions
     uart_puts(UART_ID, " Hello, UART!\n");
-    
-    // For more examples of UART use see https://github.com/raspberrypi/pico-examples/tree/master/uart
 
-      // Launch core 1
+    setup();
+
+    queue_entry_t msg = {.msgId = READY_FLAG, .objId = 0, .command = 0, .dataPtr = NULL, .dataLen = 0};
+    queue_add_blocking(&core0_to_core1_queue, &msg);
+    
     multicore_launch_core1(core1_entry);
-    initialization();
-    animation();
+
+    
+
+    while (1) {
+        tight_loop_contents(); // Keep Core 0 running
+    }
+
+
+    return 0;
 }

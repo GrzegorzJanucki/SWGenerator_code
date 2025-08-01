@@ -33,9 +33,10 @@ project(SWGenerator_code C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+add_subdirectory(encoder build.rotary_encoder)
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(SWGenerator_code main.c ssd1306.c ssd1306_init.c)
+add_executable(SWGenerator_code main.c ssd1306.c ssd1306_setup.c core1_entry.c AT24C256.c)
 
 pico_set_program_name(SWGenerator_code "SWGenerator_code")
 pico_set_program_version(SWGenerator_code "0.1")
@@ -43,13 +44,13 @@ pico_set_program_version(SWGenerator_code "0.1")
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(SWGenerator_code 0)
 pico_enable_stdio_usb(SWGenerator_code 1)
-
 # Add the standard library to the build
 target_link_libraries(SWGenerator_code
     pico_stdlib
     hardware_i2c
     hardware_uart
     pico_multicore
+    rp2040_rotary_encoder
     
 )
 
@@ -61,6 +62,7 @@ target_include_directories(SWGenerator_code PRIVATE
 # Add any user requested libraries
 target_link_libraries(SWGenerator_code 
         hardware_i2c
+        hardware_pwm
         )
 
 pico_add_extra_outputs(SWGenerator_code)

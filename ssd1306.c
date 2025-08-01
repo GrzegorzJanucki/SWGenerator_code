@@ -279,3 +279,5 @@ void ssd1306_show(ssd1306_t *p) {
 
     fancy_write(p->i2c_i, p->address, p->buffer-1, p->bufsize+1, "ssd1306_show");
 }
+
+
