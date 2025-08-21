@@ -8,6 +8,7 @@
 #include "pico/util/queue.h"
 #include "pico/sem.h"
 #include <string.h>
+#include <stdlib.h>
 
 
 #include "quadrature_encoder.pio.h"
@@ -18,6 +19,8 @@
 #include "BMSPA_font.h"
 #include "core1_entry.h"
 #include "at24c256.h"
+#include "core1_entry.h"
+#include "Si5351.h"
 
 
 
@@ -39,7 +42,7 @@ int main()
     queue_init(&core1_to_core0_queue, sizeof(queue_entry_t), 10);
 
     // I2C Initialisation. Using it at 400Khz.
-    i2c_init(I2C0_PORT, 100*1000);
+    i2c_init(I2C0_PORT, 400*1000);
     gpio_set_function(I2C0_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C0_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C0_SDA);
@@ -52,25 +55,45 @@ int main()
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
     
-    // Use some the various UART functions to send out data
-    // In a default system, printf will also output via the default UART
-    
     // Send out a string, with CR/LF conversions
     uart_puts(UART_ID, " Hello, UART!\n");
 
     setup();
+    si5351_init();
 
     queue_entry_t msg = {.msgId = READY_FLAG, .objId = 0, .command = 0, .dataPtr = NULL, .dataLen = 0};
     queue_add_blocking(&core0_to_core1_queue, &msg);
-    
     multicore_launch_core1(core1_entry);
 
-    
-
-    while (1) {
-        tight_loop_contents(); // Keep Core 0 running
+    int digits1[NUM_DIGITS] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+        // Load frequency from EEPROM
+    char read_buffer[16] = {0};
+    if (at24c256_read(mem_addr, (uint8_t *)read_buffer, 10)) {
+        for (int i = 0; i < NUM_DIGITS; i++) {
+            if (read_buffer[i] >= '0' && read_buffer[i] <= '9') {
+                digits1[i] = read_buffer[i] - '0';
+            }else{
+                break; // Invalid data, keep default
+            }
+        }
     }
+    
+    uint32_t freq_hz = strtoul(read_buffer, NULL, 10);
+    si5351_clk0_set(0);
 
-
+    //uint32_t freq_check = si5351_get_freq();
+    
+    while (1) {
+        queue_entry_t msg;
+    if (queue_try_remove(&core1_to_core0_queue, &msg)) {
+        if (msg.objId == TARGET_T) {
+            uint32_t new_freq = *(uint32_t *)msg.dataPtr;
+            si5351_clk0_set(new_freq);
+            uint32_t freq_check = si5351_clk0_get_hz();
+            printf("Nowa częstotliwość CLK0: %u Hz\n", freq_check);
+        }
+    }
+    sleep_ms(100); // Krótkie opóźnienie
+}
     return 0;
 }

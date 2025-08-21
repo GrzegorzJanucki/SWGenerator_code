@@ -14,12 +14,12 @@
 #include "button.pio.h"
 #include "AT24C256.h"
 
-#define NUM_DIGITS 9
+
 #define READY_FLAG 234
 #define TARGET_T   101
 #define CLICK      102
 #define LONG_CLICK 103
-
+#define NUM_DIGITS 9
 #define ENCODER_STEP_DIVISOR 4
 #define DEBOUNCE_US 10000
 #define BUTTON_DEBOUNCE_US 20000
@@ -84,21 +84,6 @@ void core1_entry() {
     int new_encoder, delta;
     uint32_t last_button_state = 0;
 
-    // Clear EEPROM with default frequency to overwrite 637137032
-    char write_buffer[16] = "000000000";
-
-    // Load frequency from EEPROM
-    char read_buffer[16] = {0};
-    if (at24c256_read(mem_addr, (uint8_t *)read_buffer, 10)) {
-        for (int i = 0; i < NUM_DIGITS; i++) {
-            if (read_buffer[i] >= '0' && read_buffer[i] <= '9') {
-                digits[i] = read_buffer[i] - '0';
-            }else{
-                break; // Invalid data, keep default
-            }
-        }
-    }
-
     // Helper buffer for display
     char digits_str[NUM_DIGITS + 1];
 
@@ -117,22 +102,24 @@ void core1_entry() {
         old_encoder = new_encoder;
 
             if(delta !=0){
-                int steps = delta / 4; 
-            if(editing)
-                {
-                digits[selected_digit] += steps;
-                if(digits[selected_digit] < 0) digits[selected_digit] = 0;
-                if(digits[selected_digit] > 9) digits[selected_digit] = 9;
-                }
-            else
-                {
+            int steps = delta / ENCODER_STEP_DIVISOR; 
+                if (editing) {
+                // Zapętlanie wartości cyfry z ograniczeniami zakresu
+                    if (selected_digit == 0) {
+                    // Pierwsza pozycja: zakres 0-1
+                    digits[selected_digit] = (digits[selected_digit] + steps) % 2;
+                        if (digits[selected_digit] < 0) digits[selected_digit] += 2;
+                    }else {
+                    // Pozostałe pozycje: zakres 0-9
+                    digits[selected_digit] = (digits[selected_digit] + steps) % 10;
+                        if (digits[selected_digit] < 0) digits[selected_digit] += 10;
+                    }
+            }else{
                 selected_digit += steps;
-                if(selected_digit < 0) selected_digit = 0;
-                if(selected_digit > NUM_DIGITS - 1) selected_digit = NUM_DIGITS - 1;
-                
-                }
+                if (selected_digit < 0) selected_digit = 0;
+                if (selected_digit > NUM_DIGITS - 1) selected_digit = NUM_DIGITS - 1;
             }
-
+        }
         // Handle button
         uint32_t button_state = 0;
         bool result = button_get_state(&button_state);
@@ -140,14 +127,28 @@ void core1_entry() {
             if (!last_button_state && button_state) {
                 editing = !editing;
                 if (!editing) { // Save to EEPROM when exiting edit mode
-                    for (int i = 0; i < NUM_DIGITS; ++i)
+                    for (int i = 0; i < NUM_DIGITS; ++i){
                         digits_str[i] = digits[i] + '0';
+                    }
                         digits_str[NUM_DIGITS] = '\0';
 
                         char write_buffer[16];
                         strncpy(write_buffer, digits_str, sizeof(write_buffer) - 1);
                         write_buffer[sizeof(write_buffer) - 1] = '\0';
-                        uint8_t len = strlen(write_buffer) + 1;
+                        at24c256_write(mem_addr, (uint8_t *)write_buffer, strlen(write_buffer) + 1);
+
+                        uint32_t new_freq = strtoul(digits_str, NULL, 10);
+                        if (new_freq < 8000u) new_freq = 8000u;
+                        if (new_freq > 160000000u) new_freq = 160000000u;
+                        queue_entry_t msg = {
+                        .msgId = 0,
+                        .objId = TARGET_T,
+                        .command = new_freq,
+                        .dataPtr = &new_freq,
+                        .dataLen = sizeof(new_freq)
+                         };
+                queue_add_blocking(&core1_to_core0_queue, &msg);
+                printf("Sent frequency to core0: %lu Hz\n", new_freq);
                 }
             }
             last_button_state = button_state;
@@ -157,13 +158,6 @@ void core1_entry() {
         for (int i = 0; i < NUM_DIGITS; ++i)
             digits_str[i] = digits[i] + '0';
             digits_str[NUM_DIGITS] = '\0';
-
-        // Read and verify EEPROM
-        if (at24c256_read(mem_addr, (uint8_t *)read_buffer, 10)) {
-            printf("Core 1: Read %s Hz from 0x%04X\n", read_buffer, mem_addr);
-            uint32_t freq_hz = strtoul(read_buffer, NULL, 10);
-            printf("Core 1: Parsed: %lu Hz\n", freq_hz);
-        }
 
         //OLED update
         ssd1306_clear(&disp);

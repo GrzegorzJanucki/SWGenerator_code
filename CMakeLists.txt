@@ -36,7 +36,7 @@ pico_sdk_init()
 add_subdirectory(encoder build.rotary_encoder)
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(SWGenerator_code main.c ssd1306.c ssd1306_setup.c core1_entry.c AT24C256.c)
+add_executable(SWGenerator_code main.c ssd1306.c ssd1306_setup.c core1_entry.c AT24C256.c Si5351.c)
 
 pico_set_program_name(SWGenerator_code "SWGenerator_code")
 pico_set_program_version(SWGenerator_code "0.1")

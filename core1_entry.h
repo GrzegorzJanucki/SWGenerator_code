@@ -5,6 +5,7 @@
 
 #define READY_FLAG 234
 #define TARGET_T 101
+#define NUM_DIGITS 9
 
 typedef struct {
     uint8_t msgId;
@@ -16,6 +17,8 @@ typedef struct {
 
 extern queue_t core0_to_core1_queue;
 extern queue_t core1_to_core0_queue;
+extern char digits_str;
+extern uint16_t mem_addr;
 
 void core1_entry(void);
 
