@@ -8,12 +8,13 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "ssd1306_setup.h"
+#include "font.h"
+#include "sh1106.h"
+#include "sh1106_setup.h"
 #include "bubblesstandard_font.h"
 #include "quadrature_encoder.pio.h"
 #include "button.pio.h"
 #include "AT24C256.h"
-
 
 #define READY_FLAG 234
 #define TARGET_T   101
@@ -23,8 +24,6 @@
 #define ENCODER_STEP_DIVISOR 4
 #define DEBOUNCE_US 10000
 #define BUTTON_DEBOUNCE_US 20000
-#define FONT_SCALE 2
-#define FONT_WIDTH 7
 #define DISPLAY_X_OFFSET 5
 #define DISPLAY_Y_OFFSET 32
 #define UNDERLINE_Y_OFFSET 40
@@ -33,6 +32,10 @@
 #define ENCODER_A_PIN 3
 #define ENCODER_B_PIN 27
 #define BUTTON_PIN    2
+
+#define FONT_WIDTH 7     // bazowa szerokość znaku
+#define FONT_HEIGHT 8   // bazowa wysokość (musisz znać z fontu)
+#define FONT_SCALE 1     // tu zmieniasz rozmiar
 
 uint target = 9;
 
@@ -67,7 +70,6 @@ void encoder_button_setup() {
 }
 
 void core1_entry() {
-   
     encoder_button_setup();
 
     queue_entry_t response;
@@ -77,110 +79,142 @@ void core1_entry() {
     }
 
     queue_entry_t msg;
-    int digits[NUM_DIGITS] = {0, 0, 0, 0, 0, 0, 0, 0, 0}; // 9 digits int tabela[]={0,0,0,0,0,0,0,0,0};
-    int selected_digit = 0;       // Which digit is selected (0-8)
-    bool editing = false;         // Are we editing the digit value?
+
+    // --- dwa zestawy cyfr ---
+    int digits1[NUM_DIGITS] = {0};
+    int digits2[NUM_DIGITS] = {0};
+
+    int selected_digit = 0;  
+    bool editing = false;      
+    int active_field = 0; // 0 = górny (digits1), 1 = dolny (digits2)
+
     int old_encoder = 0;
     int new_encoder, delta;
+
     uint32_t last_button_state = 0;
+    absolute_time_t button_press_time = nil_time;
 
-    // Helper buffer for display
-    char digits_str[NUM_DIGITS + 1];
+    // buffery stringów
+    char digits_str1[NUM_DIGITS + 1];
+    char digits_str2[NUM_DIGITS + 1];
 
-    // Initial display
-    for (int i = 0; i < NUM_DIGITS; ++i)
-    digits_str[i] = digits[i] + '0';
-    digits_str[NUM_DIGITS] = '\0';
-    ssd1306_clear(&disp);
-    ssd1306_draw_string_with_font(&disp, 5, 35, 2, bubblesstandard_font, digits_str);
-    ssd1306_show(&disp);
+    // --- initial display ---
+    for (int i = 0; i < NUM_DIGITS; ++i) {
+        digits_str1[i] = digits1[i] + '0';
+        digits_str2[i] = digits2[i] + '0';
+    }
+    digits_str1[NUM_DIGITS] = '\0';
+    digits_str2[NUM_DIGITS] = '\0';
 
-    int idx =0;
-    while (1){
+    sh1106_clear(&disp);
+    sh1106_draw_string_with_font(&disp, DISPLAY_X_OFFSET, 10, FONT_SCALE, bubblesstandard_font, digits_str1);
+    sh1106_draw_string_with_font(&disp, DISPLAY_X_OFFSET, 40, FONT_SCALE, bubblesstandard_font, digits_str2);
+    sh1106_show(&disp);
+
+    while (1) {
+        // --- ENKODER ---
         new_encoder = quadrature_encoder_get_count();
         delta = new_encoder - old_encoder;
         old_encoder = new_encoder;
 
-            if(delta !=0){
+        int *digits = (active_field == 0) ? digits1 : digits2;
+
+        if (delta != 0) {
             int steps = delta / ENCODER_STEP_DIVISOR; 
-                if (editing) {
-                // Zapętlanie wartości cyfry z ograniczeniami zakresu
-                    if (selected_digit == 0) {
-                    // Pierwsza pozycja: zakres 0-1
+            if (editing) {
+                if (selected_digit == 0) {
                     digits[selected_digit] = (digits[selected_digit] + steps) % 2;
-                        if (digits[selected_digit] < 0) digits[selected_digit] += 2;
-                    }else {
-                    // Pozostałe pozycje: zakres 0-9
+                    if (digits[selected_digit] < 0) digits[selected_digit] += 2;
+                } else {
                     digits[selected_digit] = (digits[selected_digit] + steps) % 10;
-                        if (digits[selected_digit] < 0) digits[selected_digit] += 10;
-                    }
-            }else{
+                    if (digits[selected_digit] < 0) digits[selected_digit] += 10;
+                }
+            } else {
                 selected_digit += steps;
                 if (selected_digit < 0) selected_digit = 0;
                 if (selected_digit > NUM_DIGITS - 1) selected_digit = NUM_DIGITS - 1;
             }
         }
-        // Handle button
-        uint32_t button_state = 0;
-        bool result = button_get_state(&button_state);
-        if (result) {
-            if (!last_button_state && button_state) {
+
+        // --- PRZYCISK ---
+    uint32_t button_state = 0;
+    bool result = button_get_state(&button_state);
+    if (result) {
+        if (!last_button_state && button_state) {
+            // wciśnięty
+            button_press_time = get_absolute_time();
+        }
+        if (last_button_state && !button_state) {
+            // puszczony
+            int64_t held_us = absolute_time_diff_us(button_press_time, get_absolute_time());
+            if (held_us > 1000000) {
+                // długi klik → zmiana pola
+                active_field = !active_field;
+                printf("Switched to field %d\n", active_field);
+            } else {
+                // krótki klik → edycja on/off
                 editing = !editing;
-                if (!editing) { // Save to EEPROM when exiting edit mode
-                    for (int i = 0; i < NUM_DIGITS; ++i){
+                if (!editing) {
+                    // zapis częstotliwości z aktywnego pola po wyjściu z edycji
+                    char digits_str[NUM_DIGITS + 1];
+                    for (int i = 0; i < NUM_DIGITS; ++i) {
                         digits_str[i] = digits[i] + '0';
                     }
-                        digits_str[NUM_DIGITS] = '\0';
+                    digits_str[NUM_DIGITS] = '\0';
+                    at24c256_write(mem_addr, (uint8_t *)digits_str, NUM_DIGITS);
 
-                        char write_buffer[16];
-                        strncpy(write_buffer, digits_str, sizeof(write_buffer) - 1);
-                        write_buffer[sizeof(write_buffer) - 1] = '\0';
-                        at24c256_write(mem_addr, (uint8_t *)write_buffer, strlen(write_buffer) + 1);
+                    uint32_t new_freq = strtoul(digits_str, NULL, 10);
+                    if (new_freq < 8000u) new_freq = 8000u;
+                    if (new_freq > 160000000u) new_freq = 160000000u;
 
-                        uint32_t new_freq = strtoul(digits_str, NULL, 10);
-                        if (new_freq < 8000u) new_freq = 8000u;
-                        if (new_freq > 160000000u) new_freq = 160000000u;
-                        queue_entry_t msg = {
+                    queue_entry_t msg = {
                         .msgId = 0,
-                        .objId = TARGET_T,
+                        .objId = (active_field == 0) ? TARGET_T : (TARGET_T + 1), // rozróżnij pole
                         .command = new_freq,
                         .dataPtr = &new_freq,
                         .dataLen = sizeof(new_freq)
-                         };
-                queue_add_blocking(&core1_to_core0_queue, &msg);
-                printf("Sent frequency to core0: %lu Hz\n", new_freq);
+                    };
+                    queue_add_blocking(&core1_to_core0_queue, &msg);
+                    printf("Sent Freq (field %d): %lu Hz\n", active_field, new_freq);
                 }
             }
-            last_button_state = button_state;
         }
-        
-        // Prepare display string
-        for (int i = 0; i < NUM_DIGITS; ++i)
-            digits_str[i] = digits[i] + '0';
-            digits_str[NUM_DIGITS] = '\0';
+        last_button_state = button_state;
+    }
+        // --- OLED update ---
+        for (int i = 0; i < NUM_DIGITS; ++i) {
+            digits_str1[i] = digits1[i] + '0';
+            digits_str2[i] = digits2[i] + '0';
+        }
+        digits_str1[NUM_DIGITS] = '\0';
+        digits_str2[NUM_DIGITS] = '\0';
 
-        //OLED update
-        ssd1306_clear(&disp);
-        ssd1306_draw_string_with_font(&disp, 5, 35, 2, bubblesstandard_font, digits_str);
+        sh1106_clear(&disp);
+        sh1106_draw_string_with_font(&disp, DISPLAY_X_OFFSET, 10, FONT_SCALE, bubblesstandard_font, digits_str1);
+        sh1106_draw_string_with_font(&disp, DISPLAY_X_OFFSET, 40, FONT_SCALE, bubblesstandard_font, digits_str2);
 
-        // Draw underline or box for selected digit
-        int char_width = 7 * 2; // font width * scale (adjust if needed)
-        int x = 5 + selected_digit * char_width;
-        int y = 55;
-        if (editing){
-            // Draw a box around the digit
-            ssd1306_draw_empty_square(&disp, x - 2, y - 20, char_width, 20);
-        }else{
-            // Draw underline
-            ssd1306_draw_line(&disp, x, y, x + char_width - 5, y);
+        // obliczenia do highlightu
+        int char_width  = FONT_WIDTH * FONT_SCALE;
+        int char_height = FONT_HEIGHT * FONT_SCALE;
+
+        int x = DISPLAY_X_OFFSET + selected_digit * char_width;
+        int y_text = (active_field == 0) ? 10 : 40;   // Y początek tekstu
+        int y_underline = y_text + char_height;       // pod linią tekstu
+
+        if (editing) {
+            sh1106_draw_empty_square(&disp, x - 2, y_text - 2, char_width + 4, char_height + 4);
+        } else {
+            sh1106_draw_line(&disp, x, y_underline, x + char_width - 2, y_underline);
         }
 
-        ssd1306_show(&disp);
-        
-        if(queue_try_remove(&core0_to_core1_queue, &msg)) {
-            // handle messages if needed
-        } 
-        sleep_ms(50); // Add a small delay to avoid flicker 
+        sh1106_show(&disp);
 
+        // odbiór wiadomości (opcjonalnie)
+        if (queue_try_remove(&core0_to_core1_queue, &msg)) {
+            // obsługa wiadomości z core0 → core1 jeśli potrzebne
+        }
+
+        sleep_ms(50);
     }
 }
+
